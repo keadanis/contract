@@ -285,16 +285,21 @@ class ContractContract(models.Model):
                 if self.contract_template_id[field_name]:
                     self[field_name] = self.contract_template_id[field_name]
 
-    @api.onchange('partner_id')
+    @api.onchange('partner_id', 'company_id')
     def _onchange_partner_id(self):
-        self.pricelist_id = self.partner_id.property_product_pricelist.id
-        self.fiscal_position_id = self.partner_id.property_account_position_id
+        partner = (
+            self.partner_id
+            if not self.company_id
+            else self.partner_id.with_context(force_company=self.company_id.id)
+        )
+        self.pricelist_id = partner.property_product_pricelist.id
+        self.fiscal_position_id = partner.env[
+            'account.fiscal.position'
+        ].get_fiscal_position(partner.id)
         if self.contract_type == 'purchase':
-            self.payment_term_id = \
-                self.partner_id.property_supplier_payment_term_id
+            self.payment_term_id = partner.property_supplier_payment_term_id
         else:
-            self.payment_term_id = \
-                self.partner_id.property_payment_term_id
+            self.payment_term_id = partner.property_payment_term_id
         self.invoice_partner_id = self.partner_id.address_get(['invoice'])[
             'invoice'
         ]
@@ -524,17 +529,18 @@ class ContractContract(models.Model):
         This method triggers the creation of the next invoices of the contracts
         even if their next invoicing date is in the future.
         """
-        invoice = self._recurring_create_invoice()
-        if invoice:
-            self.message_post(
-                body=_(
-                    'Contract manually invoiced: '
-                    '<a href="#" data-oe-model="%s" data-oe-id="%s">Invoice'
-                    '</a>'
+        invoices = self._recurring_create_invoice()
+        if invoices:
+            for invoice in invoices:
+                self.message_post(
+                    body=_(
+                        'Contract manually invoiced: '
+                        '<a href="#" data-oe-model="%s" data-oe-id="%s">Invoice'
+                        '</a>'
+                    )
+                    % (invoice._name, invoice.id)
                 )
-                % (invoice._name, invoice.id)
-            )
-        return invoice
+        return invoices
 
     @api.multi
     def _recurring_create_invoice(self, date_ref=False):
